@@ -1,0 +1,294 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+
+jobs:
+  test-python:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Cache Python dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest-cov pytest-xdist
+    
+    - name: Run unit tests
+      run: |
+        pytest tests/unit/ -v --cov=src --cov-report=xml --cov-report=html -n auto
+    
+    - name: Run integration tests
+      run: |
+        pytest tests/integration/ -v -n auto
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+  test-typescript:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run TypeScript compilation
+      run: npm run build
+    
+    - name: Run linting
+      run: npm run lint
+    
+    - name: Run tests
+      run: npm test
+
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install security tools
+      run: |
+        pip install bandit safety
+        npm install -g audit-ci
+    
+    - name: Run Python security scan
+      run: |
+        bandit -r src/ -f json -o bandit-report.json || true
+        safety check --json --output safety-report.json || true
+    
+    - name: Run Node.js security audit
+      run: |
+        npm audit --audit-level moderate
+    
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+
+  code-quality:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install code quality tools
+      run: |
+        pip install black flake8 mypy
+    
+    - name: Check code formatting
+      run: |
+        black --check src/ tests/
+    
+    - name: Run linting
+      run: |
+        flake8 src/ tests/ --max-line-length=100 --extend-ignore=E203,W503
+    
+    - name: Run type checking
+      run: |
+        mypy src/ --ignore-missing-imports
+
+  build-and-test:
+    runs-on: ubuntu-latest
+    needs: [test-python, test-typescript, security-scan, code-quality]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        npm ci
+    
+    - name: Build project
+      run: |
+        npm run build
+        python -m py_compile src/lambda/**/*.py
+    
+    - name: Test deployment script
+      run: |
+        chmod +x deploy.sh
+        ./deploy.sh --help
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    needs: [build-and-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run E2E tests
+      run: |
+        python tests/e2e/test_runner.py --config tests/e2e/test_config.json
+      env:
+        API_BASE_URL: ${{ secrets.TEST_API_BASE_URL }}
+        TEST_AUTH_TOKEN: ${{ secrets.TEST_AUTH_TOKEN }}
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [e2e-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        npm ci
+        npm install -g aws-cdk@latest
+    
+    - name: Deploy to staging
+      run: |
+        chmod +x deploy.sh
+        ./deploy.sh --environment staging --skip-tests
+      env:
+        ENVIRONMENT: staging
+        AWS_REGION: us-east-1
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [e2e-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+        aws-region: us-east-1
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        npm ci
+        npm install -g aws-cdk@latest
+    
+    - name: Deploy to production
+      run: |
+        chmod +x deploy.sh
+        ./deploy.sh --environment prod --skip-tests
+      env:
+        ENVIRONMENT: prod
+        AWS_REGION: us-east-1
+        ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: always()
+    
+    steps:
+    - name: Notify deployment status
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

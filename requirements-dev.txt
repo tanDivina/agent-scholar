@@ -1,0 +1,10 @@
+# Development dependencies for Agent Scholar
+pytest==7.4.0
+pytest-mock==3.11.1
+pytest-cov==4.1.0
+black==23.7.0
+flake8==6.0.0
+mypy==1.5.1
+boto3==1.34.0
+botocore==1.34.0
+moto==4.2.5  # For mocking AWS services in tests

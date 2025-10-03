@@ -1,0 +1,67 @@
+{
+  "parallel_execution": false,
+  "max_workers": 4,
+  "timeout": 900,
+  "retry_failed": true,
+  "max_retries": 2,
+  "generate_report": true,
+  "report_format": "json",
+  "performance_benchmarks": true,
+  "user_acceptance_tests": true,
+  "integration_tests": true,
+  
+  "test_suites": {
+    "end_to_end_scenarios": {
+      "enabled": true,
+      "timeout": 600,
+      "retry_count": 1,
+      "critical": true
+    },
+    "performance_benchmarks": {
+      "enabled": true,
+      "timeout": 900,
+      "retry_count": 0,
+      "critical": false,
+      "thresholds": {
+        "max_response_time": 10.0,
+        "min_success_rate": 0.90,
+        "max_memory_usage_mb": 200
+      }
+    },
+    "user_acceptance": {
+      "enabled": true,
+      "timeout": 600,
+      "retry_count": 1,
+      "critical": true
+    }
+  },
+  
+  "reporting": {
+    "formats": ["json", "html"],
+    "include_system_info": true,
+    "include_performance_metrics": true,
+    "include_detailed_errors": true,
+    "save_artifacts": true
+  },
+  
+  "environment": {
+    "aws_region": "us-east-1",
+    "test_data_bucket": "agent-scholar-test-data",
+    "mock_services": true,
+    "cleanup_after_tests": true
+  },
+  
+  "notifications": {
+    "enabled": false,
+    "email": "test-results@example.com",
+    "slack_webhook": "",
+    "on_failure_only": true
+  },
+  
+  "quality_gates": {
+    "min_success_rate": 95.0,
+    "max_avg_response_time": 5.0,
+    "max_memory_usage_mb": 150,
+    "min_test_coverage": 80.0
+  }
+}
